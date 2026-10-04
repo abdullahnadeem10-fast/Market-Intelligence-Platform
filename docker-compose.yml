@@ -1,0 +1,91 @@
+name: market-intelligence
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mip}:${POSTGRES_PASSWORD:-mip}@db:5432/${POSTGRES_DB:-mip}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
+  JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-720}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+  COLLECTION_INTERVAL_MINUTES: ${COLLECTION_INTERVAL_MINUTES:-60}
+  COLLECTOR_DEMO_MODE: ${COLLECTOR_DEMO_MODE:-false}
+  ENABLED_COLLECTORS: ${ENABLED_COLLECTORS:-hackernews,gdelt,rss}
+  COLLECTOR_USER_AGENT: ${COLLECTOR_USER_AGENT:-MarketIntelligencePlatform/1.0 (portfolio project)}
+  ENRICHMENT_ENABLED: ${ENRICHMENT_ENABLED:-true}
+  LLM_PROVIDER: ${LLM_PROVIDER:-extractive}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+  LLM_INPUT_COST_PER_MILLION: ${LLM_INPUT_COST_PER_MILLION:-0.15}
+  LLM_OUTPUT_COST_PER_MILLION: ${LLM_OUTPUT_COST_PER_MILLION:-0.60}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mip}
+      POSTGRES_DB: ${POSTGRES_DB:-mip}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mip} -d ${POSTGRES_DB:-mip}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # REST API server (scheduler disabled here: collection runs in the `collector` service)
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    environment:
+      <<: *backend-env
+      SCHEDULER_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # Data collection service: runs the scheduled collector in its own container
+  collector:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  # Test runner: docker compose --profile test run --rm tests
+  tests:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mip}:${POSTGRES_PASSWORD:-mip}@db:5432/mip_test
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,21 @@
+# secrets
+.env
+backend/.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+
+# local tooling
+.claude/
+
+# editor / os
+.DS_Store
+.vscode/
+.idea/
